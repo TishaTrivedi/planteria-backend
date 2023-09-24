@@ -5,11 +5,16 @@ from django.contrib.contenttypes.models import ContentType
 
 
 class Customers(models.Model):
-    first_name=models.CharField(max_length=50)
-    last_name=models.CharField(max_length=50)
-    email=models.EmailField()
-    password=models.CharField(max_length=10)
-    contact=models.CharField(max_length=10)
+    fullName=models.CharField(max_length=150,default='1')
+    address=models.CharField(max_length=1000)
+    city=models.CharField(max_length=100)
+    state=models.CharField(max_length=100)
+    zipCode=models.CharField(max_length=10)
+    country=models.CharField(max_length=100)
+    phone=models.CharField(max_length=10)
+
+    def __str__(self) -> str:
+        return self.fullName
 
 class Plants(models.Model):
     
@@ -72,8 +77,6 @@ class Products(models.Model):
 
     def __str__(self):
         return self.product_name
-
-
     
 class WishList(models.Model):
 
@@ -101,20 +104,39 @@ class WishListProduct(models.Model):
 
 class Orders(models.Model):
    plant = models.ForeignKey(Plants,on_delete=models.CASCADE)
-   customer=models.ForeignKey(Customers,on_delete=models.CASCADE)
-   #product=models.ForeignKey(Products,on_delete=models.CASCADE)
+   customer=models.ForeignKey(Customers,on_delete=models.CASCADE,null=True)
+   product=models.ForeignKey(Products,on_delete=models.CASCADE,null=True)
    quantity=models.IntegerField(default=1)
    price=models.IntegerField()
 #    address=models.CharField(max_length=100)
 #    phone=models.CharField(max_length=10)
 #    date=models.DateField(default=datetime.datetime.today)
 #    status=models.BooleanField(default=False)
-class Cart(models.Model):
-    user = models.ForeignKey(Customers, on_delete=models.CASCADE)
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
-    object_id = models.PositiveIntegerField()
-    content_object = GenericForeignKey('content_type', 'object_id')
-    quantity = models.PositiveIntegerField(default=1)  # Add this field
 
-    def __str__(self):
-        return f'{self.user.username} - {self.content_object}'
+class Cart(models.Model):
+
+    customer=models.ForeignKey(Customers,on_delete=models.CASCADE)
+    plant = models.ForeignKey(Plants,on_delete=models.CASCADE,null=True)
+    product=models.ForeignKey(Products,on_delete=models.CASCADE,null=True)
+    quantity=models.IntegerField(default=1)
+   
+    def __str__(self) -> str:
+        return f"{self.customer} : {self.plant}:{self.product}"
+    
+    def remove_from_cart(self, item):
+        # Check if the provided item matches either the plant or product
+        if item == self.plant or item == self.product:
+            self.delete()  # Delete the cart item if it matches
+            return True
+        else:
+            return False
+
+class UserRecentlyViewed(models.Model):
+    customerId=models.ForeignKey(Customers,on_delete=models.CASCADE)
+    plantId = models.ForeignKey(Plants,on_delete=models.CASCADE,null=True)
+    productId=models.ForeignKey(Products,on_delete=models.CASCADE,null=True)
+    recentlyViewedTime=models.DateTimeField(auto_now=True)
+
+    def __str__(self)->str:
+        return f"{self.customerId}:{self.plantId}:{self.productId}"
+    

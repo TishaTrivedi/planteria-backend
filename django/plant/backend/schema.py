@@ -1,7 +1,7 @@
 import graphene
 from graphene_django import DjangoObjectType
 from graphql import GraphQLError
-from .models import Customers,Orders,Plants,WishList,Products,WishListProduct,Cart
+from .models import Customers,Orders,Plants,WishList,Products,WishListProduct,Cart,UserRecentlyViewed
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 
@@ -39,6 +39,11 @@ class OrderType(DjangoObjectType):
 class CartType(DjangoObjectType):
     class Meta:
         model = Cart
+        fields = "__all__"
+
+class UserRecentlyViewedType(DjangoObjectType):
+    class Meta:
+        model = UserRecentlyViewed
         fields = "__all__"
 
 
@@ -175,14 +180,31 @@ class Query(graphene.ObjectType):
             raise GraphQLError(f"Order with Id {id} does not exist.")
         
     #cart    
-    user_cart = graphene.Field(CartType)
+    userCart = graphene.List(CartType)
+    userCartById=graphene.List(CartType,id=graphene.ID(required=True))
 
-    def resolve_user_cart(self, info):
-        user = info.context.user
-        if not user.is_authenticated:
-            raise GraphQLError("You must be logged in to view your cart.")
-        return Cart.objects.filter(user=user)
-    
+    def resolve_userCart(self, info):
+
+        return Cart.objects.all()    
+
+    def resolve_userCartById(self, info, id):
+        try:
+
+            return Cart.objects.filter(id=id)
+
+        except Cart.DoesNotExist:
+            raise GraphQLError(f"User with ID {id} does not have anything in their cart.")    
+        
+    #Recently Viewed
+    displayUserRecentlyViewed = graphene.List(UserRecentlyViewedType, customerId=graphene.ID(required=True))
+
+    def resolve_displayUserRecentlyViewed(self, info, customerId):
+        try:
+            return UserRecentlyViewed.objects.filter(customerId=customerId).order_by('-recentlyViewedTime')
+        except UserRecentlyViewed.DoesNotExist:
+            raise GraphQLError(f"Customer with ID {customerId} hasn't seen any products")
+
+
 #Mutations
 
 class CreateCustomer(graphene.Mutation):
@@ -190,14 +212,18 @@ class CreateCustomer(graphene.Mutation):
     customer=graphene.Field(CustomerType)
 
     class Arguments:
-          first_name=graphene.String(required=True)
-          last_name=graphene.String(required=True)
-          email=graphene.String(required=True)
-          password=graphene.String(required=True)
-          contact=graphene.String(required=True)
+           
+           fullName=graphene.String(required=True)
+           address=graphene.String(required=True)
+           city=graphene.String(required=True)
+           state=graphene.String(required=True)
+           zipCode=graphene.String(required=True)
+           country=graphene.String(required=True)
+           phone=graphene.String(required=True)
+          
             
-    def mutate(self,info,first_name,last_name,email,password,contact):
-        customer=Customers(first_name=first_name,last_name=last_name,email=email,password=password,contact=contact)
+    def mutate(self,info,fullName,address,city,state,zipCode,country,phone):
+        customer=Customers(fullName=fullName,address=address,city=city,state=state,zipCode=zipCode,country=country,phone=phone)
         customer.save()
         return CreateCustomer(customer=customer)
 
@@ -336,38 +362,131 @@ class RemoveProductsFromWishList(graphene.Mutation):
         except WishListProduct.DoesNotExist:
             return RemoveProductsFromWishList(deletedCount=0)
 
+
+
+           
+
 class AddToCart(graphene.Mutation):
-    cart = graphene.Field(CartType)
+    class Arguments:
+        customerId = graphene.ID(required=True)
+        itemId = graphene.ID(required=True)
+        itemType = graphene.String(required=True)
+        quantity = graphene.Int(required=True)  # Add quantity argument
+
+    saved_product = graphene.Field(CartType)
+
+    def mutate(self, info, customerId, itemId, itemType, quantity):
+        try:
+            customer = Customers.objects.get(id=customerId)
+
+            if itemType == "product":
+                product = Products.objects.get(id=itemId)
+                saved_product, created = Cart.objects.get_or_create(customer=customer, product=product)
+            elif itemType == "plant":
+                plant = Plants.objects.get(id=itemId)
+                saved_product, created = Cart.objects.get_or_create(customer=customer, plant=plant)
+            else:
+                raise GraphQLError("Invalid itemType. It must be 'product' or 'plant'.")
+
+            if not created:
+                # If the item is already in the cart, update the quantity
+                saved_product.quantity += quantity
+            else:
+                saved_product.quantity = quantity
+
+            saved_product.save()
+            return AddToCart(saved_product=saved_product)
+        except Customers.DoesNotExist:
+            raise GraphQLError(f"Customer with ID {customerId} does not exist.")
+        except Products.DoesNotExist:
+            raise GraphQLError(f"Product with ID {itemId} does not exist.")
+        except Plants.DoesNotExist:
+            raise GraphQLError(f"Plant with ID {itemId} does not exist.")
+
+
+class RemoveFromCart(graphene.Mutation):
 
     class Arguments:
-        product_id = graphene.Int(required=True)
-        quantity = graphene.Int(required=True)
+        customerId = graphene.ID(required=True)
+        itemId = graphene.ID(required=True)
+        itemType = graphene.String(required=True)
 
-    def mutate(self, info, product_id, quantity):
-        # Check if the user is authenticated, and if not, raise an error.
-        if not info.context.user.is_authenticated:
-            raise GraphQLError("You must be logged in to add items to the cart.")
+    deletedCount=graphene.Int()
+    def mutate(self, info, customerId, itemId, itemType):
+        try:
+            customer = Customers.objects.get(id=customerId)
+            if itemType =="product":
+                product=Products.objects.get(id=itemId)
+                customer_cart_product=Cart.objects.get(customer=customer,product=product)
+                customer_cart_product.delete()
+                return RemoveFromCart(deletedCount=1)
+            
+            elif itemType =="plant":
+                plant=Plants.objects.get(id=itemId)
+                customer_cart_product=Cart.objects.get(customer=customer,plant=plant)
+                customer_cart_product.delete()
+                return RemoveFromCart(deletedCount=1)
 
-        user = info.context.user
-        product = Products.objects.get(pk=product_id)
+        except Cart.DoesNotExist:
+            return RemoveFromCart(deletedCount=0)     
+        except Customers.DoesNotExist:
+            raise GraphQLError(f"Customer with ID {customerId} does not exist.")
+        except Products.DoesNotExist:
+            raise GraphQLError(f"Product with ID {itemId} does not exist.")
+        except Plants.DoesNotExist:
+            raise GraphQLError(f"Plant with ID {itemId} does not exist.")
 
-        # Check if an item for this product already exists in the user's cart.
-        cart_item, created = Cart.objects.get_or_create(
-            user=user,
-            content_type=ContentType.objects.get_for_model(Products),  # Use the ContentType of Products model
-            object_id=product_id,
-        )
+from django.utils import timezone
+class AddToRecentlyViewed(graphene.Mutation):
+    class Arguments:
+        customerId = graphene.ID(required=True)
+        itemId = graphene.ID(required=True)
+        itemType = graphene.String(required=True)
+        
+    recentlyViewed = graphene.Field(UserRecentlyViewedType)
 
-        # If the item already exists, update the quantity; otherwise, create a new cart item.
-        if not created:
-            cart_item.quantity += quantity
-        else:
-            cart_item.quantity = quantity
+    def mutate(self, info, customerId, itemId, itemType):
+        try:
+            customer = Customers.objects.get(id=customerId)
+            product = None 
+            plant=None
+            if itemType == "product":
+                product = Products.objects.get(id=itemId)
+                # print(str(product.query))
+                existing_entry = UserRecentlyViewed.objects.filter(customerId=customer, productId=product).first()
+            
+            elif itemType == "plant":
+                plant = Plants.objects.get(id=itemId)
+                existing_entry = UserRecentlyViewed.objects.filter(customerId=customer, plantId=plant).first()
+            
+            else:
+                raise GraphQLError("Invalid itemType. It must be 'product' or 'plant'.")
 
-        cart_item.save()
+            if existing_entry:
+                existing_entry.recentlyViewedTime = timezone.now()
+                existing_entry.save()
+                return AddToRecentlyViewed(recentlyViewed=existing_entry)
 
-        return AddToCart(cart=cart_item)
+            viewed_count = UserRecentlyViewed.objects.filter(customerId=customer).count()
 
+            if viewed_count >= 5:
+                oldest_entry = UserRecentlyViewed.objects.filter(customerId=customer).order_by('-recentlyViewedTime').first()
+                oldest_entry.plantId = plant if itemType == "plant" else oldest_entry.plantId
+                oldest_entry.productId = product if itemType == "product" else oldest_entry.productId
+                oldest_entry.recentlyViewedTime = timezone.now()
+                oldest_entry.save()
+                return AddToRecentlyViewed(recentlyViewed=oldest_entry)
+            else:
+                recentlyViewed = UserRecentlyViewed(customerId=customer, plantId=plant, productId=product, recentlyViewedTime=timezone.now())
+                recentlyViewed.save()
+                return AddToRecentlyViewed(recentlyViewed=recentlyViewed)
+
+        except Customers.DoesNotExist:
+            raise GraphQLError(f"Customer with Id {customerId} does not exist")
+        except Plants.DoesNotExist:
+            raise GraphQLError(f"Plant with Id {itemId} does not exist")
+        except Products.DoesNotExist:
+            raise GraphQLError(f"Product with id {itemId} does not exist")
 
 class Mutation(graphene.ObjectType):
     create_customer= CreateCustomer.Field()
@@ -380,7 +499,12 @@ class Mutation(graphene.ObjectType):
 
     add_products_to_wishlist=AddProductsToWishList.Field()
     remove_products_from_wishlist=RemoveProductsFromWishList.Field()
+
     add_to_cart = AddToCart.Field()
+    remove_from_cart= RemoveFromCart.Field()
+    # update_cart_item_quantity = UpdateCartItemQuantity.Field()
+
+    add_to_recently_viewed = AddToRecentlyViewed.Field()
 
 
 
